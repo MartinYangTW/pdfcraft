@@ -1321,6 +1321,33 @@ trailer << /Root 1 0 R >>
         assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255]);
     }
 
+    /// #1770: a tiling pattern whose /BBox is far larger than its step was scaled to a
+    /// sub-pixel cell (`MAX_PIXMAP_SIZE / bbox` × step rounds to 0), and vello_common panicked
+    /// indexing a 0-wide pixmap. The pattern is skipped; the rest of the page still draws.
+    #[test]
+    fn tiling_pattern_with_bbox_far_larger_than_step_does_not_panic() {
+        let content = "/Pattern cs /P1 scn 0 0 40 40 re f 1 0 0 rg 0 0 4 4 re f";
+        let pdf = format!(
+            "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /Pattern << /P1 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 100000 10] /XStep 10 /YStep 10 /Length 18 >> stream
+0.5 g 0 0 5 5 re f
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+            content.len()
+        );
+        let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255]);
+    }
+
     /// From the nightly `cargo xtask fuzz` (CI caps each child at 4 GiB): a stencil mask claiming
     /// /W 4294967295 and a CCITT image claiming /Columns 4294967295 each allocated 4 GiB while
     /// decoding (locally: 9.6 GB and 4.3 GB). Vendored hayro patches `image_size_ok` and

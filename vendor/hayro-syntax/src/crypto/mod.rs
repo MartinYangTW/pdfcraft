@@ -148,6 +148,12 @@ pub(crate) fn get(
     if byte_length == 0 {
         return Err(InvalidEncryption);
     }
+    // PdfCraft patch: Algorithm 2 truncates the 16-byte MD5 output to `Length/8`
+    // bytes. For V 1/2/4 (RC4 / AESV2) the key is at most 16 bytes; an out-of-spec
+    // `/Length 256` with `/V 2` used to slice past the hash and panic.
+    if matches!(encryption_v, 1 | 2 | 4) && !(5..=16).contains(&byte_length) {
+        return Err(InvalidEncryption);
+    }
 
     let owner_string = dict.get::<object::String<'_>>(O).ok_or(InvalidEncryption)?;
     let user_string = dict.get::<object::String<'_>>(U).ok_or(InvalidEncryption)?;

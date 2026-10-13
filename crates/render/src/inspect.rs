@@ -1264,6 +1264,48 @@ trailer << /Root 1 0 R >>
         assert_eq!(pretty_date("D:20260930104512-04'00'"), "2026-09-30 10:45");
         assert_eq!(pretty_date("yesterday"), "yesterday");
     }
+
+    /// #1769: Standard security handler `/V 2 /R 3` with an out-of-spec `/Length 256`
+    /// used to panic while computing the encryption key (MD5 sliced past 16 bytes). It
+    /// must fail as invalid encryption, not crash. `/Length 128` (in range) still reports
+    /// a password is needed when authentication fails.
+    #[test]
+    fn rc4_v2_with_out_of_spec_key_length_does_not_panic() {
+        let o = "28bf4e5e4e758a4164004e56fffa01082e2e00b6d0683e802f0ca9fe6453697a";
+        let u = "00".repeat(32);
+        let id = "0123456789abcdef0123456789abcdef";
+        let encrypted = |length: u16| -> Vec<u8> {
+            let objs = [
+                "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>".to_string(),
+                format!("<< /Filter /Standard /V 2 /R 3 /Length {length} /O <{o}> /U <{u}> /P -4 >>"),
+            ];
+            let mut out = b"%PDF-1.7\n".to_vec();
+            let mut offsets = Vec::new();
+            for (i, obj) in objs.iter().enumerate() {
+                offsets.push(out.len());
+                out.extend_from_slice(format!("{} 0 obj\n{obj}\nendobj\n", i + 1).as_bytes());
+            }
+            let xref = out.len();
+            out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+            for offset in offsets {
+                out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+            }
+            out.extend_from_slice(
+                format!("trailer\n<< /Size {} /Root 1 0 R /Encrypt 4 0 R /ID [<{id}> <{id}>] >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1)
+                    .as_bytes(),
+            );
+            out
+        };
+        let bad = inspect(Arc::new(encrypted(256)), None);
+        assert!(matches!(bad, Err(OpenError::Unsupported(_))), "Length 256 must be refused without panicking: {bad:?}");
+        let ok_range = inspect(Arc::new(encrypted(128)), None);
+        assert!(
+            matches!(ok_range, Err(OpenError::NeedsPassword | OpenError::WrongPassword | OpenError::Unsupported(_))),
+            "Length 128 must not panic: {ok_range:?}"
+        );
+    }
 }
 
 /// "1.7" from the parser's version name ("Pdf17", "V1_7", …).

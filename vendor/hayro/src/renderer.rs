@@ -606,53 +606,74 @@ impl Renderer {
                         let pix_width = x_step.abs().round() as u16;
                         let pix_height = y_step.abs().round() as u16;
 
-                        let mut renderer = Self {
-                            ctx: RenderContext::new_with(
-                                pix_width,
-                                pix_height,
-                                derive_settings(self.ctx.render_settings()),
-                            ),
-                            cur_mask: None,
-                            inside_pattern: true,
-                            soft_mask_cache: HashMap::default(),
-                            outline_cache: self.outline_cache.clone(),
-                            in_type3_glyph: false,
-                            scaler: self.scaler,
-                            image_transparency_stack: Vec::new(),
-                        };
-                        let mut initial_transform = Affine::scale_non_uniform(xs as f64, ys as f64)
-                            * Affine::translate((-bbox.x0, -bbox.y0));
-                        t.interpret(&mut renderer, initial_transform, is_stroke);
-                        let mut pix = Pixmap::new(pix_width, pix_height);
-                        renderer.ctx.flush();
-                        let mut resources = vello_cpu::Resources::default();
-                        renderer.ctx.render_to_pixmap(&mut resources, &mut pix);
+                        // PdfCraft patch: when /BBox dwarfs /XStep|/YStep, the MAX_PIXMAP_SIZE
+                        // scale can leave a sub-pixel cell. A 0×N pixmap panics in vello_common
+                        // (`index out of bounds … 4294967295`). Skip the pattern instead.
+                        if pix_width == 0 || pix_height == 0 {
+                            AlphaColor::from_rgba8(0, 0, 0, 0).into()
+                        } else {
+                            let mut renderer = Self {
+                                ctx: RenderContext::new_with(
+                                    pix_width,
+                                    pix_height,
+                                    derive_settings(self.ctx.render_settings()),
+                                ),
+                                cur_mask: None,
+                                inside_pattern: true,
+                                soft_mask_cache: HashMap::default(),
+                                outline_cache: self.outline_cache.clone(),
+                                in_type3_glyph: false,
+                                scaler: self.scaler,
+                                image_transparency_stack: Vec::new(),
+                            };
+                            let mut initial_transform =
+                                Affine::scale_non_uniform(xs as f64, ys as f64)
+                                    * Affine::translate((-bbox.x0, -bbox.y0));
+                            t.interpret(&mut renderer, initial_transform, is_stroke);
+                            let mut pix = Pixmap::new(pix_width, pix_height);
+                            renderer.ctx.flush();
+                            let mut resources = vello_cpu::Resources::default();
+                            renderer.ctx.render_to_pixmap(&mut resources, &mut pix);
 
-                        // TODO: Fix these
-                        if x_step < 0.0 {
-                            initial_transform *=
-                                Affine::new([-1.0, 0.0, 0.0, 1.0, scaled_width as f64, 0.0]);
+                            // TODO: Fix these
+                            if x_step < 0.0 {
+                                initial_transform *= Affine::new([
+                                    -1.0,
+                                    0.0,
+                                    0.0,
+                                    1.0,
+                                    scaled_width as f64,
+                                    0.0,
+                                ]);
+                            }
+
+                            if y_step < 0.0 {
+                                initial_transform *= Affine::new([
+                                    1.0,
+                                    0.0,
+                                    0.0,
+                                    -1.0,
+                                    0.0,
+                                    scaled_height as f64,
+                                ]);
+                            }
+
+                            paint_transform = path_transform.inverse()
+                                * t.matrix
+                                * initial_transform.inverse();
+
+                            let image = Image {
+                                image: ImageSource::Pixmap(Arc::new(pix)),
+                                sampler: ImageSampler {
+                                    x_extend: peniko::Extend::Repeat,
+                                    y_extend: peniko::Extend::Repeat,
+                                    quality: ImageQuality::Medium,
+                                    alpha: 1.0,
+                                },
+                            };
+
+                            PaintType::Image(image)
                         }
-
-                        if y_step < 0.0 {
-                            initial_transform *=
-                                Affine::new([1.0, 0.0, 0.0, -1.0, 0.0, scaled_height as f64]);
-                        }
-
-                        paint_transform =
-                            path_transform.inverse() * t.matrix * initial_transform.inverse();
-
-                        let image = Image {
-                            image: ImageSource::Pixmap(Arc::new(pix)),
-                            sampler: ImageSampler {
-                                x_extend: peniko::Extend::Repeat,
-                                y_extend: peniko::Extend::Repeat,
-                                quality: ImageQuality::Medium,
-                                alpha: 1.0,
-                            },
-                        };
-
-                        PaintType::Image(image)
                     }
                 }
             }
